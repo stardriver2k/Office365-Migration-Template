@@ -1,0 +1,128 @@
+Office365-Migration-Template
+Erstellt von Alexander Karls, pegasus GmbH
+Erstellungs-Datum: 21.10.2019
+Versions-Stand: 1.0
+Versions-History: 
+21.10.19: Script-Erstellung
+
+Logins and Basics:
+Cloud - Source (for C2C Migrations):
+Username: admin@XXX.onmicrosoft.com
+Password: XXX
+
+Local - Source (for OnPrem. 2 Cloud Migrations)
+Username local AD: mig-admin@domain.local
+Password: XXX
+
+Cloud - Target:
+Username: admin@YYY.onmicrosoft.com
+Password: XXX
+
+SAS URI - Target (Only for PST Imports, generate with O365-Admin-Center:
+https://XXX > Needed in AZ-Copy / Azure Storage Explorer
+
+AZCopy:
+azcopy /Source:"C:\Temp\PST" /Dest:"https://XXX" /V:"c:\Temp\PST-Log.txt" /Y > paste SAS URI here
+
+------------------------------------
+
+Tasks:
+
+AD:
+-Admin-Account angelegt
+-Gruppen für Sync angelegt (SG Office365Sync)
+-User in Gruppen angelegt
+-ggf. Proxy Address(es) pflegen
+-Installation Azure AD Sync
+
+DC / Fileserver:
+-Software bereitstellen
+-OneDrive Client installieren und anmelden
+-Ordner kommunizieren und Daten in Ordner kopieren
+-Berechtigungs-Gruppen und Einstellungen vornehmen 
+-Wenn fertig, Freigaben und Rechte einstellen
+-mit Kunde abstimmen
+
+O365:
+-Domains reg.
+-Azure AD Sync
+-Lizenzen zuweisen
+-ggf. Gruppen, Verteiler erstellen
+
+------------------------------------
+
+Setup Exchange Online - Source:
+
+# Mit O365 verbinden
+Set-ExecutionPolicy Unrestricted
+$LiveCred = Get-Credential
+$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://ps.outlook.com/powershell/ -Credential $LiveCred -Authentication Basic -AllowRedirection
+Import-PSSession $Session
+
+# Anpassungen aktivieren
+Enable-OrganizationCustomization
+
+# "Anmelden als Anwendung" erlauben
+New-ManagementRoleAssignment -Role "ApplicationImpersonation" -User admin@XXX.onmicrosoft.com
+Get-ManagementRoleAssignment -Role "ApplicationImpersonation"
+
+# Mailbox Import aktivieren
+New-ManagementRoleAssignment -Role "Mailbox Import Export" -SecurityGroup "Organization Management" -Name "Import Export Org Management"
+Get-ManagementRoleAssignment –Role "Mailbox Import Export" | FL RoleAssigneeName, Name
+
+# Admin Vollzugriff erteilen
+Get-Mailbox -ResultSize Unlimited | Add-MailboxPermission -AccessRights FullAccess -User admin@XXX.onmicrosoft.com
+
+# Throttling abschalten für Migration
+New-ThrottlingPolicy MigrationWizPolicy
+Set-ThrottlingPolicy MigrationWizPolicy -RCAMaxConcurrency Unlimited -EWSMaxConcurrency Unlimited -EWSMaxSubscriptions Unlimited -CPAMaxConcurrency Unlimited -EwsCutoffBalance Unlimited -EwsMaxBurst Unlimited -EwsRechargeRate Unlimited
+Set-Mailbox "admin@XXX.onmicrosoft.com" -ThrottlingPolicy MigrationWizPolicy
+
+# User exportieren
+$mailboxes = Get-Mailbox -resultSize unlimited
+$mailboxes | foreach { Get-User $_ | select WindowsEmailAddress, FirstName, LastName, DisplayName } | export-csv -NoTypeInformation c:\Mailboxes.csv -Delimiter "," -Encoding unicode
+
+------------------------------------
+
+Setup Exchange OnPrem.:
+
+# Admin Vollzugriff erteilen
+Get-Mailbox -ResultSize Unlimited | Add-MailboxPermission -AccessRights FullAccess -User mig-admin@domain.local
+
+# Throttling abschalten für Migration
+New-ThrottlingPolicy MigrationWizPolicy
+Set-ThrottlingPolicy MigrationWizPolicy -RCAMaxConcurrency Unlimited -EWSMaxConcurrency Unlimited -EWSMaxSubscriptions Unlimited -CPAMaxConcurrency Unlimited -EwsCutoffBalance Unlimited -EwsMaxBurst Unlimited -EwsRechargeRate Unlimited
+Set-Mailbox "mig-admin@domain.local" -ThrottlingPolicy MigrationWizPolicy
+
+# User exportieren
+$mailboxes = Get-Mailbox -resultSize unlimited
+$mailboxes | foreach { Get-User $_ | select WindowsEmailAddress, FirstName, LastName, DisplayName } | export-csv -NoTypeInformation c:\Mailboxes.csv -Delimiter "," -Encoding unicode
+
+------------------------------------
+
+Exchange Online - Target:
+
+# Mit O365 verbinden
+Set-ExecutionPolicy Unrestricted
+$LiveCred = Get-Credential
+$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://ps.outlook.com/powershell/ -Credential $LiveCred -Authentication Basic -AllowRedirection
+Import-PSSession $Session
+
+# Anpassungen aktivieren
+Enable-OrganizationCustomization
+
+# "Anmelden als Anwendung" erlauben
+New-ManagementRoleAssignment -Role "ApplicationImpersonation" -User admin@YYY.onmicrosoft.com
+Get-ManagementRoleAssignment -Role "ApplicationImpersonation"
+
+# Mailbox Import aktivieren
+New-ManagementRoleAssignment -Role "Mailbox Import Export" -SecurityGroup "Organization Management" -Name "Import Export Org Management"
+Get-ManagementRoleAssignment –Role "Mailbox Import Export" | FL RoleAssigneeName, Name
+
+# Mailboxen auf Deutsch umstellen
+foreach ($Mailbox in (Get-Mailbox -ResultSize Unlimited)) { Set-MailboxRegionalConfiguration -identity "$($Mailbox.Name)" -Language de-DE -DateFormat dd.MM.yyyy -TimeZone "W. Europe Standard Time" -LocalizeDefaultFolderName}
+foreach ($Mailbox in (Get-Mailbox -ResultSize Unlimited)) { Get-MailboxRegionalConfiguration -identity "$($Mailbox.Name)"}
+
+# Posteingang mit Relevanz deaktivieren
+Set-OrganizationConfig -FocusedInboxOn $false
+
